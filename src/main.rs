@@ -1,7 +1,11 @@
 use sha3::{Digest, Sha3_256};
 use serde::{Serialize, Deserialize};
-
-
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 // Transaction: Tracks Peace movements
 #[derive(Serialize, Deserialize, Debug)]
@@ -13,6 +17,7 @@ struct Transaction {
     global_tx_id: String,
 }
 
+// Interaction: Records actions earning Peace
 #[derive(Serialize, Deserialize, Debug)]
 struct Interaction {
     event_type: String,
@@ -21,7 +26,16 @@ struct Interaction {
     score: u32,
 }
 
-// Profile: User's dating profile
+// RawProfileData: Unencrypted profile data
+#[derive(Serialize, Deserialize, Debug)]
+struct RawProfileData {
+    name: String,
+    age: u32,
+    bio: String,
+    interests: Vec<String>,
+}
+
+// Profile: User’s dating profile (encrypted)
 #[derive(Serialize, Deserialize, Debug)]
 struct Profile {
     user_id: String,
@@ -29,24 +43,68 @@ struct Profile {
     is_deleted: bool,
 }
 
+impl Profile {
+    fn new(user_id: String, raw_data: RawProfileData, key: &[u8; 32]) -> Self {
+        let cipher = Aes256Gcm::new(key.into());
+        
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let plaintext = serde_json::to_vec(&raw_data)
+            .expect("Failed to serialize profile data");
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .expect("Encryption failed");
+
+        let mut encrypted_data = nonce_bytes.to_vec();
+        encrypted_data.extend(ciphertext);
+
+        Profile {
+            user_id,
+            encrypted_data,
+            is_deleted: false,
+        }
+    }
+
+    fn decrypt(&self, key: &[u8; 32]) -> Option<RawProfileData> {
+        if self.is_deleted {
+            return None;
+        }
+
+        let cipher = Aes256Gcm::new(key.into());
+
+        if self.encrypted_data.len() < 12 {
+            return None;
+        }
+        let (nonce_bytes, ciphertext) = self.encrypted_data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        match cipher.decrypt(nonce, ciphertext) {
+            Ok(plaintext) => serde_json::from_slice(&plaintext).ok(),
+            Err(_) => None,
+        }
+    }
+}
+
 // UserShard: Precise shard for one user
 #[derive(Serialize, Deserialize, Debug)]
 struct UserShard {
-    user_id: String, // User id
-    balance: f64, //Current Peace Coins
-    transactions: Vec<Transaction>, //User's txs only
-    interactions: Vec<Interaction>, // User's events only
-    profile: Profile, // User's profile
-    relevant_profiles: Vec<Profile>, //Filtered Matches
+    user_id: String,
+    balance: f64,
+    transactions: Vec<Transaction>,
+    interactions: Vec<Interaction>,
+    profile: Profile,
+    relevant_profiles: Vec<Profile>,
 }
 
-// GlobalBlock: Global ledger block (full notes)
+// GlobalBlock: Global ledger block for full nodes
 #[derive(Serialize, Deserialize, Debug)]
 struct GlobalBlock {
     transactions: Vec<Transaction>,
-    previous_hash: String, //Links to prior block
-    nonce: u64, // For proof-of-work
-    hash: String, // Block hash
+    previous_hash: String,
+    nonce: u64,
+    hash: String,
 }
 
 impl GlobalBlock {
@@ -62,21 +120,29 @@ impl GlobalBlock {
     }
 
     fn compute_hash(&self) -> String {
-        let mut hasher = Sha3_256::new();
-        let tx_bytes = serde_json::to_string(&self.transactions).unwrap().into_bytes();
+        let mut hasher = Sha3_256::new(); // Line causing Rust Analyzer error
+        let tx_bytes = serde_json::to_vec(&self.transactions)
+            .expect("Failed to serialize transactions");
         hasher.update(&tx_bytes);
         hasher.update(self.previous_hash.as_bytes());
+        hasher.update(self.nonce.to_be_bytes());
         hex::encode(hasher.finalize())
     }
 }
 
 fn main() {
-    // Test a UserShard
-    let profile = Profile {
-        user_id: "user1".to_string(),
-        encrypted_data: b"encrypted_profile".to_vec(),
-        is_deleted: false,
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+
+    let raw_data = RawProfileData {
+        name: "Alice".to_string(),
+        age: 28,
+        bio: "Loves hiking and coffee".to_string(),
+        interests: vec!["hiking".to_string(), "photography".to_string()],
     };
+
+    let profile = Profile::new("user1".to_string(), raw_data, &key);
+
     let tx = Transaction {
         sender_id: "system".to_string(),
         receiver_id: "user1".to_string(),
@@ -99,7 +165,11 @@ fn main() {
         relevant_profiles: Vec::new(),
     };
 
-    // Test a GlobalBlock
+    match user_shard.profile.decrypt(&key) {
+        Some(decrypted_data) => println!("Decrypted Profile: {:?}", decrypted_data),
+        None => println!("Failed to decrypt profile"),
+    }
+
     let global_block = GlobalBlock::new(
         vec![Transaction {
             sender_id: "system".to_string(),
@@ -114,4 +184,3 @@ fn main() {
     println!("User Shard: {:?}", user_shard);
     println!("Global Block Hash: {}", global_block.hash);
 }
-
