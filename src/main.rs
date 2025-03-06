@@ -1,3 +1,6 @@
+// Cuneos Blockchain: A decentralized dating app backend with dynamic difficulty and secure key exchange
+// Built for the Weave platform
+
 use sha3::{Digest, Sha3_256};
 use serde::{Serialize, Deserialize};
 use aes_gcm::{
@@ -5,19 +8,45 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::seq::SliceRandom;
+use rand::{Rng, RngCore}; // Added RngCore import
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use x25519_dalek::{PublicKey, EphemeralSecret};
 
-// TransactionType: Enum to distinguish transaction types
+// Miner: Represents a miner in the Cuneos network with a name and mining power
+#[derive(Debug, Clone)]
+struct Miner {
+    name: String,
+    mining_power: f64,
+}
+
+impl Miner {
+    fn new(name: String, mining_power: f64) -> Self {
+        Miner { name, mining_power }
+    }
+
+    fn mine_block(&self, block: &mut GlobalBlock, difficulty: usize) {
+        let target = "0".repeat(difficulty);
+        let increment = (self.mining_power * 1000.0) as u64;
+        loop {
+            block.hash = block.compute_hash();
+            if block.hash.starts_with(&target) {
+                break;
+            }
+            block.nonce += increment;
+        }
+    }
+}
+
+// TransactionType: Enum to distinguish transaction types in Cuneos
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum TransactionType {
     PeaceTransfer,
     ProfileDeletion,
 }
 
-// Transaction: Tracks events in the ledger
+// Transaction: Tracks events in the Cuneos ledger
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Transaction {
     transaction_type: TransactionType,
@@ -55,7 +84,7 @@ impl Transaction {
     }
 }
 
-// Interaction: Records actions earning Peace
+// Interaction: Records actions earning Peace in the Cuneos system
 #[derive(Serialize, Deserialize, Debug)]
 struct Interaction {
     event_type: String,
@@ -64,7 +93,7 @@ struct Interaction {
     score: u32,
 }
 
-// RawProfileData: Unencrypted profile data
+// RawProfileData: Unencrypted profile data for Weave users
 #[derive(Serialize, Deserialize, Debug)]
 struct RawProfileData {
     name: String,
@@ -74,7 +103,7 @@ struct RawProfileData {
     location: String,
 }
 
-// Profile: User’s dating profile (encrypted)
+// Profile: User’s dating profile (encrypted) in Cuneos
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Profile {
     user_id: String,
@@ -130,11 +159,11 @@ impl Profile {
     }
 }
 
-// UserKeyPair: Represents a user's key exchange pair and symmetric key
+// UserKeyPair: Represents a user's key exchange pair and symmetric key in Cuneos
 struct UserKeyPair {
     secret_key: EphemeralSecret,
     public_key: PublicKey,
-    symmetric_key: [u8; 32], // AES key for profile encryption
+    symmetric_key: [u8; 32],
 }
 
 impl UserKeyPair {
@@ -155,7 +184,7 @@ impl UserKeyPair {
     }
 }
 
-// ProfileFilter: Represents user-defined filters for fetching profiles
+// ProfileFilter: Represents user-defined filters for fetching profiles in Weave
 #[derive(Debug)]
 struct ProfileFilter {
     location: Option<String>,
@@ -175,7 +204,7 @@ impl ProfileFilter {
     }
 }
 
-// UserShard: Precise shard for one user
+// UserShard: Precise shard for one user in Cuneos
 #[derive(Serialize, Deserialize, Debug)]
 struct UserShard {
     user_id: String,
@@ -275,7 +304,7 @@ impl UserShard {
     }
 }
 
-// GlobalBlock: Global ledger block for full nodes
+// GlobalBlock: Global ledger block for full nodes in Cuneos
 #[derive(Serialize, Deserialize, Debug)]
 struct GlobalBlock {
     transactions: Vec<Transaction>,
@@ -286,20 +315,19 @@ struct GlobalBlock {
 }
 
 impl GlobalBlock {
-    fn new(transactions: Vec<Transaction>, previous_hash: String, difficulty: usize) -> Self {
+    fn new(transactions: Vec<Transaction>, previous_hash: String) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs();
 
-        let mut block = GlobalBlock {
+        let block = GlobalBlock {
             transactions,
             previous_hash,
             nonce: 0,
             hash: String::new(),
             timestamp,
         };
-        block.mine_block(difficulty);
         block
     }
 
@@ -313,31 +341,24 @@ impl GlobalBlock {
         hasher.update(self.timestamp.to_be_bytes());
         hex::encode(hasher.finalize())
     }
-
-    fn mine_block(&mut self, difficulty: usize) {
-        let target = "0".repeat(difficulty);
-        loop {
-            self.hash = self.compute_hash();
-            if self.hash.starts_with(&target) {
-                break;
-            }
-            self.nonce += 1;
-        }
-    }
 }
 
-// GlobalLedger: Manages the chain of GlobalBlocks
+// GlobalLedger: Manages the chain of GlobalBlocks in Cuneos
 #[derive(Debug)]
 struct GlobalLedger {
     chain: Vec<GlobalBlock>,
-    difficulty: usize,
-    max_difficulty: usize, // Added to cap difficulty
-    target_block_time: u64,
+    difficulty: f64,
+    max_difficulty: usize,
+    min_difficulty: usize,
+    target_block_time: f64,
     adjustment_interval: usize,
+    miners: Vec<Miner>,
+    mining_durations: Vec<f64>,
+    ema_block_time: Option<f64>,
 }
 
 impl GlobalLedger {
-    fn new(initial_difficulty: usize, max_difficulty: usize, target_block_time: u64, adjustment_interval: usize) -> Self {
+    fn new(initial_difficulty: usize, max_difficulty: usize, min_difficulty: usize, target_block_time: f64, adjustment_interval: usize, miners: Vec<Miner>) -> Self {
         let genesis_block = GlobalBlock::new(
             vec![Transaction::new_peace_transfer(
                 "system".to_string(),
@@ -347,62 +368,96 @@ impl GlobalLedger {
                 "genesis_tx".to_string(),
             )],
             "0".to_string(),
-            initial_difficulty,
         );
         GlobalLedger {
             chain: vec![genesis_block],
-            difficulty: initial_difficulty,
+            difficulty: initial_difficulty as f64,
             max_difficulty,
+            min_difficulty,
             target_block_time,
             adjustment_interval,
+            miners,
+            mining_durations: Vec::new(),
+            ema_block_time: None,
         }
     }
 
-    fn add_block(&mut self, transactions: Vec<Transaction>) {
+    fn add_block(&mut self, transactions: Vec<Transaction>) -> String {
         let previous_hash = self.chain.last()
             .map(|block| block.hash.clone())
             .unwrap_or_else(|| "0".to_string());
+        
+        let mut block = GlobalBlock::new(transactions, previous_hash);
+        
+        let miner = self.miners.choose(&mut rand::thread_rng()).expect("At least one miner should exist");
+        let miner_name = miner.name.clone();
+        
         let start = Instant::now();
-        let new_block = GlobalBlock::new(transactions, previous_hash, self.difficulty);
-        start.elapsed();
+        miner.mine_block(&mut block, self.difficulty as usize);
+        let duration = start.elapsed().as_secs_f64();
+        
+        self.mining_durations.push(duration);
+        self.chain.push(block);
 
-        self.chain.push(new_block);
+        const ALPHA: f64 = 0.3;
+        self.ema_block_time = match self.ema_block_time {
+            Some(ema) => Some(ALPHA * duration + (1.0 - ALPHA) * ema),
+            None => Some(duration),
+        };
 
         if self.chain.len() % self.adjustment_interval == 0 {
             self.adjust_difficulty();
         }
+
+        miner_name
     }
 
     fn adjust_difficulty(&mut self) {
-        let start_idx = if self.chain.len() > self.adjustment_interval {
-            self.chain.len() - self.adjustment_interval
+        let start_idx = if self.mining_durations.len() > self.adjustment_interval {
+            self.mining_durations.len() - self.adjustment_interval
         } else {
             0
         };
 
-        let recent_blocks = &self.chain[start_idx..];
-        if recent_blocks.len() < 2 {
+        let recent_durations = &self.mining_durations[start_idx..];
+        if recent_durations.len() < 2 {
             return;
         }
 
-        let mut total_time = 0;
-        for i in 1..recent_blocks.len() {
-            let time_diff = recent_blocks[i].timestamp - recent_blocks[i - 1].timestamp;
-            total_time += time_diff;
-        }
-        let avg_block_time = total_time as f64 / (recent_blocks.len() - 1) as f64;
+        let avg_block_time = self.ema_block_time.unwrap_or_else(|| {
+            recent_durations.iter().sum::<f64>() / recent_durations.len() as f64
+        });
 
-        let target_time = self.target_block_time as f64;
-        if avg_block_time < target_time * 0.8 {
-            if self.difficulty < self.max_difficulty { // Cap at max_difficulty
-                self.difficulty += 1;
-                println!("Increasing difficulty to {} (avg block time: {}s)", self.difficulty, avg_block_time);
+        let min_time = recent_durations.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_time = recent_durations.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        println!(
+            "Adjustment stats: EMA block time: {:.2}s, Min: {:.2}s, Max: {:.2}s, Recent durations: {:?}", 
+            avg_block_time, min_time, max_time, recent_durations
+        );
+
+        let lower_threshold = self.target_block_time * 0.5;
+        let upper_threshold = self.target_block_time * 1.5;
+
+        if avg_block_time < lower_threshold {
+            let factor = self.target_block_time / avg_block_time;
+            self.difficulty *= factor;
+            if self.difficulty > self.max_difficulty as f64 {
+                self.difficulty = self.max_difficulty as f64;
             }
-        } else if avg_block_time > target_time * 1.2 {
-            if self.difficulty > 1 {
-                self.difficulty -= 1;
-                println!("Decreasing difficulty to {} (avg block time: {}s)", self.difficulty, avg_block_time);
+            println!(
+                "Increasing difficulty to {:.2} (EMA block time: {:.2}s, target: {:.2}s)", 
+                self.difficulty, avg_block_time, self.target_block_time
+            );
+        } else if avg_block_time > upper_threshold {
+            let factor = self.target_block_time / avg_block_time;
+            self.difficulty *= factor;
+            if self.difficulty < self.min_difficulty as f64 {
+                self.difficulty = self.min_difficulty as f64;
             }
+            println!(
+                "Decreasing difficulty to {:.2} (EMA block time: {:.2}s, target: {:.2}s)", 
+                self.difficulty, avg_block_time, self.target_block_time
+            );
         }
     }
 
@@ -410,16 +465,24 @@ impl GlobalLedger {
         &self.chain
     }
 
-    fn get_difficulty(&self) -> usize {
+    fn get_difficulty(&self) -> f64 {
         self.difficulty
     }
 }
 
 fn main() {
     const INITIAL_DIFFICULTY: usize = 3;
-    const MAX_DIFFICULTY: usize = 4; // Added to cap difficulty
-    const TARGET_BLOCK_TIME: u64 = 5;
+    const MAX_DIFFICULTY: usize = 4;
+    const MIN_DIFFICULTY: usize = 1;
+    const TARGET_BLOCK_TIME: f64 = 5.0;
     const ADJUSTMENT_INTERVAL: usize = 3;
+    const TOTAL_BLOCKS: usize = 20;
+
+    let miners = vec![
+        Miner::new("Miner1".to_string(), 1.0),
+        Miner::new("Miner2".to_string(), 1.5),
+        Miner::new("Miner3".to_string(), 0.7),
+    ];
 
     let mut key_pairs: HashMap<String, UserKeyPair> = HashMap::new();
     let mut mock_profile_db = Vec::new();
@@ -448,7 +511,6 @@ fn main() {
 
     let mut shared_symmetric_keys: HashMap<(String, String), [u8; 32]> = HashMap::new();
 
-    // Extract Alice's and Bob's key pairs and fields before deriving shared secrets
     let alice_keys = key_pairs.remove("alice").unwrap();
     let alice_symmetric_key = alice_keys.symmetric_key;
     let alice_public_key = alice_keys.public_key;
@@ -457,11 +519,9 @@ fn main() {
     let bob_symmetric_key = bob_keys.symmetric_key;
     let bob_public_key = bob_keys.public_key;
 
-    // Now derive shared secrets (this consumes alice_keys and bob_keys)
     let shared_secret_alice_bob = alice_keys.derive_shared_secret(&bob_public_key);
     let shared_secret_bob_alice = bob_keys.derive_shared_secret(&alice_public_key);
 
-    // Encrypt Alice's symmetric key with the shared secret for Bob
     let cipher = Aes256Gcm::new(&shared_secret_alice_bob.into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -472,7 +532,6 @@ fn main() {
     encrypted_key_with_nonce.extend(encrypted_key);
     shared_symmetric_keys.insert(("bob".to_string(), "alice".to_string()), alice_symmetric_key);
 
-    // Encrypt Bob's symmetric key with the shared secret for Alice
     let cipher = Aes256Gcm::new(&shared_secret_bob_alice.into());
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -482,7 +541,6 @@ fn main() {
     encrypted_key_with_nonce.extend(encrypted_key);
     shared_symmetric_keys.insert(("alice".to_string(), "bob".to_string()), bob_symmetric_key);
 
-    // Allow Alice to access her own profile by adding her symmetric key to shared_symmetric_keys
     shared_symmetric_keys.insert(("alice".to_string(), "alice".to_string()), alice_symmetric_key);
 
     let alice_profile = mock_profile_db.iter()
@@ -490,7 +548,7 @@ fn main() {
         .expect("Alice's profile should exist")
         .clone();
 
-    let mut ledger = GlobalLedger::new(INITIAL_DIFFICULTY, MAX_DIFFICULTY, TARGET_BLOCK_TIME, ADJUSTMENT_INTERVAL);
+    let mut ledger = GlobalLedger::new(INITIAL_DIFFICULTY, MAX_DIFFICULTY, MIN_DIFFICULTY, TARGET_BLOCK_TIME, ADJUSTMENT_INTERVAL, miners);
 
     let tx = Transaction::new_peace_transfer(
         "system".to_string(),
@@ -514,9 +572,9 @@ fn main() {
     );
 
     let start = Instant::now();
-    ledger.add_block(vec![tx]);
+    let miner_name = ledger.add_block(vec![tx]);
     let duration = start.elapsed();
-    println!("Time to mine block 1: {:?}", duration);
+    println!("Block 1 mined by {} in {:?}", miner_name, duration);
 
     let filter = ProfileFilter::new(
         Some("CA".to_string()),
@@ -543,26 +601,34 @@ fn main() {
     charlie_profile.delete();
 
     let start = Instant::now();
-    ledger.add_block(vec![Transaction::new_profile_deletion(
+    let miner_name = ledger.add_block(vec![Transaction::new_profile_deletion(
         "charlie".to_string(),
         "2025-03-05".to_string(),
         "delete_charlie".to_string(),
     )]);
     let duration = start.elapsed();
-    println!("Time to mine block 2: {:?}", duration);
+    println!("Block 2 mined by {} in {:?}", miner_name, duration);
 
-    for i in 3..=6 {
+    let user_ids: Vec<String> = vec!["alice".to_string(), "bob".to_string(), "charlie".to_string(), "diana".to_string()];
+    for i in 3..=TOTAL_BLOCKS {
         let start = Instant::now();
-        ledger.add_block(vec![Transaction::new_peace_transfer(
-            "system".to_string(),
-            format!("user{}", i),
-            5.0,
-            format!("2025-03-0{}", i),
-            format!("tx00{}", i),
-        )]);
+        let num_txs = rand::thread_rng().gen_range(1..=10);
+        let mut transactions = Vec::new();
+        for j in 0..num_txs {
+            let sender = user_ids.choose(&mut rand::thread_rng()).unwrap();
+            let receiver = user_ids.choose(&mut rand::thread_rng()).unwrap();
+            transactions.push(Transaction::new_peace_transfer(
+                sender.clone(),
+                receiver.clone(),
+                rand::thread_rng().gen_range(1.0..10.0),
+                format!("2025-03-{:02}", i),
+                format!("tx{:03}_{}", i, j),
+            ));
+        }
+        let miner_name = ledger.add_block(transactions);
         let duration = start.elapsed();
-        println!("Time to mine block {}: {:?}", i, duration);
-        println!("Current difficulty: {}", ledger.get_difficulty());
+        println!("Block {} mined by {} in {:?}", i, miner_name, duration);
+        println!("Current difficulty: {:.2}", ledger.get_difficulty());
     }
 
     println!("\nFetching profiles after Charlie deletes their profile:");
@@ -576,7 +642,7 @@ fn main() {
     }
     println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
 
-    println!("\nGlobal Ledger Chain:");
+    println!("\nCuneos Global Ledger Chain:");
     for (i, block) in ledger.get_chain().iter().enumerate() {
         println!("Block {}: Hash = {}", i, block.hash);
         println!("  Previous Hash: {}", block.previous_hash);
@@ -584,4 +650,6 @@ fn main() {
         println!("  Transactions: {:?}", block.transactions);
         println!("  Nonce: {}", block.nonce);
     }
+
+    println!("\nNote: Miner win stats not tracked per block in this version. Extend GlobalBlock to include miner_name if needed.");
 }
