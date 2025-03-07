@@ -9,7 +9,7 @@ use aes_gcm::{
 };
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, RngCore}; // Added RngCore import
+use rand::{Rng, RngCore};
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use x25519_dalek::{PublicKey, EphemeralSecret};
@@ -44,6 +44,16 @@ impl Miner {
 enum TransactionType {
     PeaceTransfer,
     ProfileDeletion,
+    ProfileUpdate,
+    Match,
+    KeyRevocation,
+    Message,
+    Like,
+    PhotoShare,
+    BlockUser,
+    VideoCall,
+    ReportUser,
+    KeyShare,
 }
 
 // Transaction: Tracks events in the Cuneos ledger
@@ -53,7 +63,13 @@ struct Transaction {
     sender_id: String,
     receiver_id: String,
     amount: Option<f64>,
+    duration: Option<u32>,
+    reason: Option<String>,
     user_id: Option<String>,
+    updated_profile: Option<Vec<u8>>,
+    match_pair: Option<(String, String)>,
+    revoked_key_pair: Option<(String, String)>,
+    encrypted_key: Option<Vec<u8>>,
     timestamp: String,
     global_tx_id: String,
 }
@@ -65,7 +81,13 @@ impl Transaction {
             sender_id,
             receiver_id,
             amount: Some(amount),
+            duration: None,
+            reason: None,
             user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
             timestamp,
             global_tx_id,
         }
@@ -77,7 +99,193 @@ impl Transaction {
             sender_id: user_id.clone(),
             receiver_id: "system".to_string(),
             amount: None,
+            duration: None,
+            reason: None,
             user_id: Some(user_id),
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_profile_update(user_id: String, updated_profile: Vec<u8>, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::ProfileUpdate,
+            sender_id: user_id.clone(),
+            receiver_id: "system".to_string(),
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: Some(user_id),
+            updated_profile: Some(updated_profile),
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_match(user_id1: String, user_id2: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::Match,
+            sender_id: user_id1.clone(),
+            receiver_id: user_id2.clone(),
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: Some((user_id1, user_id2)),
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_key_revocation(revoker_id: String, target_id: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::KeyRevocation,
+            sender_id: revoker_id.clone(),
+            receiver_id: target_id.clone(),
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: Some((revoker_id, target_id)),
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_message(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::Message,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_like(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::Like,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_photo_share(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::PhotoShare,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_block_user(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::BlockUser,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_video_call(sender_id: String, receiver_id: String, duration: u32, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::VideoCall,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: Some(duration),
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_report_user(sender_id: String, receiver_id: String, reason: String, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::ReportUser,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: Some(reason),
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_key_share(sender_id: String, receiver_id: String, encrypted_key: Vec<u8>, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::KeyShare,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: Some(encrypted_key),
             timestamp,
             global_tx_id,
         }
@@ -154,8 +362,21 @@ impl Profile {
         }
     }
 
-    fn delete(&mut self) {
-        self.is_deleted = true;
+    fn update(&self, new_data: RawProfileData, key: &[u8; 32]) -> Vec<u8> {
+        let cipher = Aes256Gcm::new(key.into());
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let plaintext = serde_json::to_vec(&new_data)
+            .expect("Failed to serialize updated profile data");
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .expect("Encryption failed");
+
+        let mut encrypted_data = nonce_bytes.to_vec();
+        encrypted_data.extend(ciphertext);
+        encrypted_data
     }
 }
 
@@ -170,7 +391,7 @@ impl UserKeyPair {
     fn new() -> Self {
         let secret_key = EphemeralSecret::random_from_rng(OsRng);
         let public_key = PublicKey::from(&secret_key);
-        let mut symmetric_key = [0u8; 32];
+        let mut symmetric_key: [u8; 32] = [0u8; 32];
         OsRng.fill_bytes(&mut symmetric_key);
         UserKeyPair {
             secret_key,
@@ -191,15 +412,29 @@ struct ProfileFilter {
     min_age: Option<u32>,
     max_age: Option<u32>,
     interests: Option<Vec<String>>,
+    bio_keywords: Option<Vec<String>>,
+    min_score: Option<u32>,
+    recent_matches: Option<bool>,
 }
 
 impl ProfileFilter {
-    fn new(location: Option<String>, min_age: Option<u32>, max_age: Option<u32>, interests: Option<Vec<String>>) -> Self {
+    fn new(
+        location: Option<String>,
+        min_age: Option<u32>,
+        max_age: Option<u32>,
+        interests: Option<Vec<String>>,
+        bio_keywords: Option<Vec<String>>,
+        min_score: Option<u32>,
+        recent_matches: Option<bool>,
+    ) -> Self {
         ProfileFilter {
             location,
             min_age,
             max_age,
             interests,
+            bio_keywords,
+            min_score,
+            recent_matches,
         }
     }
 }
@@ -233,24 +468,106 @@ impl UserShard {
         }
     }
 
+    fn calculate_interaction_score(&self, target_id: &str) -> u32 {
+        self.interactions
+            .iter()
+            .filter(|i| i.target_id == target_id || i.user_id == target_id)
+            .map(|i| i.score)
+            .sum()
+    }
+
     fn fetch_relevant_profiles(
         &mut self,
         filter: &ProfileFilter,
         mock_profile_db: &[Profile],
-        shared_keys: &HashMap<(String, String), [u8; 32]>,
+        shared_keys: &mut HashMap<(String, String), [u8; 32]>,
         fetcher_id: &str,
+        ledger: &GlobalLedger,
     ) -> Vec<String> {
         self.relevant_profiles.clear();
         let mut inaccessible_profiles = Vec::new();
+        let mut profiles_with_scores: Vec<(Profile, u32)> = Vec::new();
+
+        let recent_matches: Vec<(String, String)> = if filter.recent_matches.unwrap_or(false) {
+            ledger
+                .get_chain()
+                .iter()
+                .flat_map(|block| &block.transactions)
+                .filter_map(|tx| {
+                    if let TransactionType::Match = tx.transaction_type {
+                        tx.match_pair.clone()
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let revoked_keys: Vec<(String, String)> = ledger
+            .get_chain()
+            .iter()
+            .flat_map(|block| &block.transactions)
+            .filter_map(|tx| {
+                if let TransactionType::KeyRevocation = tx.transaction_type {
+                    tx.revoked_key_pair.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let blocked_users: Vec<(String, String)> = ledger
+            .get_chain()
+            .iter()
+            .flat_map(|block| &block.transactions)
+            .filter_map(|tx| {
+                if let TransactionType::BlockUser = tx.transaction_type {
+                    Some((tx.sender_id.clone(), tx.receiver_id.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let reported_users: HashMap<String, usize> = {
+            let mut reports = HashMap::new();
+            for block in ledger.get_chain() {
+                for tx in &block.transactions {
+                    if let TransactionType::ReportUser = tx.transaction_type {
+                        *reports.entry(tx.receiver_id.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+            reports
+        };
+
+        const REPORT_THRESHOLD: usize = 2;
 
         for profile in mock_profile_db {
-            if profile.is_deleted {
+            if profile.is_deleted || profile.user_id == fetcher_id {
+                continue;
+            }
+
+            if blocked_users.contains(&(fetcher_id.to_string(), profile.user_id.clone())) ||
+               blocked_users.contains(&(profile.user_id.clone(), fetcher_id.to_string())) {
+                continue;
+            }
+
+            if reported_users.get(&profile.user_id).unwrap_or(&0) >= &REPORT_THRESHOLD {
                 continue;
             }
 
             let key_pair = (fetcher_id.to_string(), profile.user_id.clone());
+            let reverse_key_pair = (profile.user_id.clone(), fetcher_id.to_string());
             match shared_keys.get(&key_pair) {
                 Some(decryption_key) => {
+                    if revoked_keys.contains(&reverse_key_pair) {
+                        inaccessible_profiles.push(profile.user_id.clone());
+                        continue;
+                    }
+
                     if let Some(raw_data) = profile.decrypt(decryption_key) {
                         let mut matches = true;
 
@@ -279,8 +596,32 @@ impl UserShard {
                             }
                         }
 
+                        if let Some(keywords) = &filter.bio_keywords {
+                            let bio_lower = raw_data.bio.to_lowercase();
+                            let any_keyword_present = keywords.iter()
+                                .any(|kw| bio_lower.contains(&kw.to_lowercase()));
+                            if !any_keyword_present {
+                                matches = false;
+                            }
+                        }
+
+                        let score = self.calculate_interaction_score(&profile.user_id);
+                        if let Some(min_score) = filter.min_score {
+                            if score < min_score {
+                                matches = false;
+                            }
+                        }
+
+                        if filter.recent_matches.unwrap_or(false) {
+                            let is_recent_match = recent_matches.iter()
+                                .any(|(id1, id2)| (id1 == fetcher_id && id2 == &profile.user_id) || (id2 == fetcher_id && id1 == &profile.user_id));
+                            if !is_recent_match {
+                                matches = false;
+                            }
+                        }
+
                         if matches {
-                            self.relevant_profiles.push(profile.clone());
+                            profiles_with_scores.push((profile.clone(), score));
                         }
                     }
                 }
@@ -290,17 +631,59 @@ impl UserShard {
             }
         }
 
+        if filter.min_score.is_some() {
+            profiles_with_scores.sort_by(|a, b| b.1.cmp(&a.1));
+        }
+
+        self.relevant_profiles = profiles_with_scores.into_iter().map(|(p, _)| p).collect();
         inaccessible_profiles
     }
 
-    fn delete_profile(&mut self, ledger: &mut GlobalLedger, timestamp: String, global_tx_id: String) {
-        self.profile.delete();
+    fn delete_profile(&mut self, ledger: &mut GlobalLedger, mock_profile_db: &mut Vec<Profile>, timestamp: String, global_tx_id: String) {
+        self.profile.is_deleted = true;
+        if let Some(profile) = mock_profile_db.iter_mut().find(|p| p.user_id == self.user_id) {
+            profile.is_deleted = true;
+        }
         let deletion_tx = Transaction::new_profile_deletion(
             self.user_id.clone(),
             timestamp,
             global_tx_id,
         );
         ledger.add_block(vec![deletion_tx]);
+    }
+
+    fn update_profile(&mut self, ledger: &mut GlobalLedger, mock_profile_db: &mut Vec<Profile>, new_data: RawProfileData, key: &[u8; 32], timestamp: String, global_tx_id: String) {
+        let updated_encrypted_data = self.profile.update(new_data, key);
+        let update_tx = Transaction::new_profile_update(
+            self.user_id.clone(),
+            updated_encrypted_data.clone(),
+            timestamp,
+            global_tx_id,
+        );
+        self.profile.encrypted_data = updated_encrypted_data.clone();
+        if let Some(profile) = mock_profile_db.iter_mut().find(|p| p.user_id == self.user_id) {
+            profile.encrypted_data = updated_encrypted_data;
+        }
+        ledger.add_block(vec![update_tx]);
+    }
+
+    fn revoke_key(
+        &mut self,
+        ledger: &mut GlobalLedger,
+        target_id: String,
+        shared_keys: &mut HashMap<(String, String), [u8; 32]>,
+        timestamp: String,
+        global_tx_id: String,
+    ) {
+        let reverse_key_pair = (target_id.clone(), self.user_id.clone());
+        shared_keys.remove(&reverse_key_pair);
+        let revocation_tx = Transaction::new_key_revocation(
+            self.user_id.clone(),
+            target_id,
+            timestamp,
+            global_tx_id,
+        );
+        ledger.add_block(vec![revocation_tx]);
     }
 }
 
@@ -312,22 +695,25 @@ struct GlobalBlock {
     nonce: u64,
     hash: String,
     timestamp: u64,
+    miner_name: String,
 }
 
 impl GlobalBlock {
-    fn new(transactions: Vec<Transaction>, previous_hash: String) -> Self {
+    fn new(transactions: Vec<Transaction>, previous_hash: String, miner: &Miner, difficulty: usize) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs();
 
-        let block = GlobalBlock {
+        let mut block = GlobalBlock {
             transactions,
             previous_hash,
             nonce: 0,
             hash: String::new(),
             timestamp,
+            miner_name: miner.name.clone(),
         };
+        miner.mine_block(&mut block, difficulty);
         block
     }
 
@@ -359,6 +745,7 @@ struct GlobalLedger {
 
 impl GlobalLedger {
     fn new(initial_difficulty: usize, max_difficulty: usize, min_difficulty: usize, target_block_time: f64, adjustment_interval: usize, miners: Vec<Miner>) -> Self {
+        let genesis_miner = &miners[0];
         let genesis_block = GlobalBlock::new(
             vec![Transaction::new_peace_transfer(
                 "system".to_string(),
@@ -368,6 +755,8 @@ impl GlobalLedger {
                 "genesis_tx".to_string(),
             )],
             "0".to_string(),
+            genesis_miner,
+            initial_difficulty,
         );
         GlobalLedger {
             chain: vec![genesis_block],
@@ -387,13 +776,11 @@ impl GlobalLedger {
             .map(|block| block.hash.clone())
             .unwrap_or_else(|| "0".to_string());
         
-        let mut block = GlobalBlock::new(transactions, previous_hash);
-        
         let miner = self.miners.choose(&mut rand::thread_rng()).expect("At least one miner should exist");
         let miner_name = miner.name.clone();
         
         let start = Instant::now();
-        miner.mine_block(&mut block, self.difficulty as usize);
+        let block = GlobalBlock::new(transactions, previous_hash, miner, self.difficulty as usize);
         let duration = start.elapsed().as_secs_f64();
         
         self.mining_durations.push(duration);
@@ -511,11 +898,11 @@ fn main() {
 
     let mut shared_symmetric_keys: HashMap<(String, String), [u8; 32]> = HashMap::new();
 
-    let alice_keys = key_pairs.remove("alice").unwrap();
+    // Consume key pairs to derive shared secrets
+    let alice_keys = key_pairs.remove("alice").expect("Alice's key pair should exist");
     let alice_symmetric_key = alice_keys.symmetric_key;
     let alice_public_key = alice_keys.public_key;
-
-    let bob_keys = key_pairs.remove("bob").unwrap();
+    let bob_keys = key_pairs.remove("bob").expect("Bob's key pair should exist");
     let bob_symmetric_key = bob_keys.symmetric_key;
     let bob_public_key = bob_keys.public_key;
 
@@ -557,17 +944,11 @@ fn main() {
         "2025-03-04".to_string(),
         "tx001".to_string(),
     );
-    let int = Interaction {
-        event_type: "match".to_string(),
-        user_id: "alice".to_string(),
-        target_id: "bob".to_string(),
-        score: 5,
-    };
-    let mut user_shard = UserShard::new(
+    let mut alice_shard = UserShard::new(
         "alice".to_string(),
         5.0,
         vec![tx.clone()],
-        vec![int],
+        Vec::new(),
         alice_profile,
     );
 
@@ -576,16 +957,19 @@ fn main() {
     let duration = start.elapsed();
     println!("Block 1 mined by {} in {:?}", miner_name, duration);
 
-    let filter = ProfileFilter::new(
+    let basic_filter = ProfileFilter::new(
         Some("CA".to_string()),
         Some(25),
         Some(30),
         Some(vec!["hiking".to_string(), "photography".to_string()]),
+        None,
+        None,
+        None,
     );
 
-    println!("Fetching profiles before deletion:");
-    let inaccessible = user_shard.fetch_relevant_profiles(&filter, &mock_profile_db, &shared_symmetric_keys, "alice");
-    for profile in &user_shard.relevant_profiles {
+    println!("Fetching profiles before updates (basic filter):");
+    let inaccessible = alice_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "alice", &ledger);
+    for profile in &alice_shard.relevant_profiles {
         if let Some(key) = shared_symmetric_keys.get(&("alice".to_string(), profile.user_id.clone())) {
             if let Some(raw_data) = profile.decrypt(key) {
                 println!("User {}: {:?}", profile.user_id, raw_data);
@@ -594,23 +978,256 @@ fn main() {
     }
     println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
 
-    println!("\nSimulating Charlie deleting their profile...");
-    let charlie_profile = mock_profile_db.iter_mut()
-        .find(|p| p.user_id == "charlie")
-        .expect("Charlie's profile should exist");
-    charlie_profile.delete();
-
+    println!("\nSimulating Alice updating her profile...");
+    let updated_alice_data = RawProfileData {
+        name: "Alice".to_string(),
+        age: 28,
+        bio: "Loves hiking, coffee, and now yoga".to_string(),
+        interests: vec!["hiking".to_string(), "photography".to_string(), "yoga".to_string()],
+        location: "CA".to_string(),
+    };
     let start = Instant::now();
-    let miner_name = ledger.add_block(vec![Transaction::new_profile_deletion(
-        "charlie".to_string(),
-        "2025-03-05".to_string(),
-        "delete_charlie".to_string(),
-    )]);
+    alice_shard.update_profile(&mut ledger, &mut mock_profile_db, updated_alice_data, &alice_symmetric_key, "2025-03-05".to_string(), "update_alice".to_string());
     let duration = start.elapsed();
+    let miner_name = ledger.get_chain().last().unwrap().miner_name.clone();
     println!("Block 2 mined by {} in {:?}", miner_name, duration);
 
+    println!("\nSimulating a match between Alice and Bob...");
+    let start = Instant::now();
+    let match_tx = Transaction::new_match(
+        "alice".to_string(),
+        "bob".to_string(),
+        "2025-03-06".to_string(),
+        "match_alice_bob".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![match_tx]);
+    let duration = start.elapsed();
+    println!("Block 3 mined by {} in {:?}", miner_name, duration);
+    alice_shard.interactions.push(Interaction {
+        event_type: "match".to_string(),
+        user_id: "alice".to_string(),
+        target_id: "bob".to_string(),
+        score: 5,
+    });
+
+    println!("\nSimulating Alice messaging Bob...");
+    let start = Instant::now();
+    let message_tx = Transaction::new_message(
+        "alice".to_string(),
+        "bob".to_string(),
+        "2025-03-06".to_string(),
+        "message_alice_bob".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![message_tx]);
+    let duration = start.elapsed();
+    println!("Block 4 mined by {} in {:?}", miner_name, duration);
+    alice_shard.interactions.push(Interaction {
+        event_type: "message".to_string(),
+        user_id: "alice".to_string(),
+        target_id: "bob".to_string(),
+        score: 2,
+    });
+
+    println!("\nSimulating Bob liking Alice's profile...");
+    let start = Instant::now();
+    let like_tx = Transaction::new_like(
+        "bob".to_string(),
+        "alice".to_string(),
+        "2025-03-06".to_string(),
+        "like_bob_alice".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![like_tx]);
+    let duration = start.elapsed();
+    println!("Block 5 mined by {} in {:?}", miner_name, duration);
+    alice_shard.interactions.push(Interaction {
+        event_type: "like".to_string(),
+        user_id: "bob".to_string(),
+        target_id: "alice".to_string(),
+        score: 1,
+    });
+
+    println!("\nSimulating Alice sharing a photo with Bob...");
+    let start = Instant::now();
+    let photo_tx = Transaction::new_photo_share(
+        "alice".to_string(),
+        "bob".to_string(),
+        "2025-03-06".to_string(),
+        "photo_alice_bob".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![photo_tx]);
+    let duration = start.elapsed();
+    println!("Block 6 mined by {} in {:?}", miner_name, duration);
+    alice_shard.interactions.push(Interaction {
+        event_type: "photoshare".to_string(),
+        user_id: "alice".to_string(),
+        target_id: "bob".to_string(),
+        score: 3,
+    });
+
+    println!("\nBob fetching profiles after interactions (basic filter):");
+    let mut bob_shard = UserShard::new(
+        "bob".to_string(),
+        0.0,
+        Vec::new(),
+        vec![
+            Interaction {
+                event_type: "match".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 5,
+            },
+            Interaction {
+                event_type: "message".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 2,
+            },
+            Interaction {
+                event_type: "like".to_string(),
+                user_id: "bob".to_string(),
+                target_id: "alice".to_string(),
+                score: 1,
+            },
+            Interaction {
+                event_type: "photoshare".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 3,
+            },
+        ],
+        mock_profile_db.iter()
+            .find(|p| p.user_id == "bob")
+            .expect("Bob's profile should exist")
+            .clone(),
+    );
+    let inaccessible = bob_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "bob", &ledger);
+    for profile in &bob_shard.relevant_profiles {
+        if let Some(key) = shared_symmetric_keys.get(&("bob".to_string(), profile.user_id.clone())) {
+            if let Some(raw_data) = profile.decrypt(key) {
+                println!("User {}: {:?}", profile.user_id, raw_data);
+            }
+        }
+    }
+    println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
+
+    println!("\nSimulating Charlie deleting their profile...");
+    let mut charlie_shard = UserShard::new(
+        "charlie".to_string(),
+        0.0,
+        Vec::new(),
+        Vec::new(),
+        mock_profile_db.iter()
+            .find(|p| p.user_id == "charlie")
+            .expect("Charlie's profile should exist")
+            .clone(),
+    );
+    let start = Instant::now();
+    charlie_shard.delete_profile(&mut ledger, &mut mock_profile_db, "2025-03-07".to_string(), "delete_charlie".to_string());
+    let duration = start.elapsed();
+    let miner_name = ledger.get_chain().last().unwrap().miner_name.clone();
+    println!("Block 7 mined by {} in {:?}", miner_name, duration);
+
+    println!("\nSimulating Alice revoking her key shared with Bob...");
+    let start = Instant::now();
+    alice_shard.revoke_key(&mut ledger, "bob".to_string(), &mut shared_symmetric_keys, "2025-03-08".to_string(), "revoke_alice_bob".to_string());
+    let duration = start.elapsed();
+    let miner_name = ledger.get_chain().last().unwrap().miner_name.clone();
+    println!("Block 8 mined by {} in {:?}", miner_name, duration);
+
+    println!("\nSimulating Bob blocking Charlie...");
+    let start = Instant::now();
+    let block_tx = Transaction::new_block_user(
+        "bob".to_string(),
+        "charlie".to_string(),
+        "2025-03-09".to_string(),
+        "block_bob_charlie".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![block_tx]);
+    let duration = start.elapsed();
+    println!("Block 9 mined by {} in {:?}", miner_name, duration);
+
+    println!("\nSimulating Bob video calling Alice...");
+    let start = Instant::now();
+    let video_call_tx = Transaction::new_video_call(
+        "bob".to_string(),
+        "alice".to_string(),
+        600,
+        "2025-03-10".to_string(),
+        "videocall_bob_alice".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![video_call_tx]);
+    let duration = start.elapsed();
+    println!("Block 10 mined by {} in {:?}", miner_name, duration);
+    bob_shard.interactions.push(Interaction {
+        event_type: "videocall".to_string(),
+        user_id: "bob".to_string(),
+        target_id: "alice".to_string(),
+        score: 4,
+    });
+    alice_shard.interactions.push(Interaction {
+        event_type: "videocall".to_string(),
+        user_id: "bob".to_string(),
+        target_id: "alice".to_string(),
+        score: 4,
+    });
+
+    println!("\nSimulating Alice reporting Charlie...");
+    let start = Instant::now();
+    let report_tx1 = Transaction::new_report_user(
+        "alice".to_string(),
+        "charlie".to_string(),
+        "spam".to_string(),
+        "2025-03-11".to_string(),
+        "report_alice_charlie".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![report_tx1]);
+    let duration = start.elapsed();
+    println!("Block 11 mined by {} in {:?}", miner_name, duration);
+
+    println!("\nSimulating Bob reporting Charlie...");
+    let start = Instant::now();
+    let report_tx2 = Transaction::new_report_user(
+        "bob".to_string(),
+        "charlie".to_string(),
+        "harassment".to_string(),
+        "2025-03-12".to_string(),
+        "report_bob_charlie".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![report_tx2]);
+    let duration = start.elapsed();
+    println!("Block 12 mined by {} in {:?}", miner_name, duration);
+
+    println!("\nSimulating Alice re-sharing her key with Bob...");
+    let start = Instant::now();
+    let cipher = Aes256Gcm::new(&shared_secret_alice_bob.into());
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let encrypted_key = cipher.encrypt(nonce, alice_symmetric_key.as_ref())
+        .expect("Failed to encrypt symmetric key for re-sharing");
+    let mut encrypted_key_with_nonce = nonce_bytes.to_vec();
+    encrypted_key_with_nonce.extend(encrypted_key);
+    let key_share_tx = Transaction::new_key_share(
+        "alice".to_string(),
+        "bob".to_string(),
+        encrypted_key_with_nonce.clone(),
+        "2025-03-13".to_string(),
+        "keyshare_alice_bob".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![key_share_tx]);
+    let duration = start.elapsed();
+    println!("Block 13 mined by {} in {:?}", miner_name, duration);
+    shared_symmetric_keys.insert(("bob".to_string(), "alice".to_string()), alice_symmetric_key);
+    // Clear the revocation from the ledger
+    ledger.chain.iter_mut().for_each(|block| {
+        block.transactions.retain(|tx| {
+            !matches!(tx.transaction_type, TransactionType::KeyRevocation)
+                || tx.revoked_key_pair != Some(("alice".to_string(), "bob".to_string()))
+        });
+    });
+
     let user_ids: Vec<String> = vec!["alice".to_string(), "bob".to_string(), "charlie".to_string(), "diana".to_string()];
-    for i in 3..=TOTAL_BLOCKS {
+    for i in 14..=TOTAL_BLOCKS {
         let start = Instant::now();
         let num_txs = rand::thread_rng().gen_range(1..=10);
         let mut transactions = Vec::new();
@@ -621,7 +1238,7 @@ fn main() {
                 sender.clone(),
                 receiver.clone(),
                 rand::thread_rng().gen_range(1.0..10.0),
-                format!("2025-03-{:02}", i),
+                format!("2025-03-{:02}", i - 3),
                 format!("tx{:03}_{}", i, j),
             ));
         }
@@ -631,10 +1248,43 @@ fn main() {
         println!("Current difficulty: {:.2}", ledger.get_difficulty());
     }
 
-    println!("\nFetching profiles after Charlie deletes their profile:");
-    let inaccessible = user_shard.fetch_relevant_profiles(&filter, &mock_profile_db, &shared_symmetric_keys, "alice");
-    for profile in &user_shard.relevant_profiles {
+    println!("\nFetching profiles after updates, deletion, key revocation, block, video call, reports, and key re-sharing (basic filter):");
+    let inaccessible = alice_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "alice", &ledger);
+    for profile in &alice_shard.relevant_profiles {
         if let Some(key) = shared_symmetric_keys.get(&("alice".to_string(), profile.user_id.clone())) {
+            if let Some(raw_data) = profile.decrypt(key) {
+                println!("User {}: {:?}", profile.user_id, raw_data);
+            }
+        }
+    }
+    println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
+
+    let enhanced_filter = ProfileFilter::new(
+        Some("CA".to_string()),
+        None,
+        None,
+        None,
+        Some(vec!["hiking".to_string(), "yoga".to_string()]),
+        Some(15),
+        Some(true),
+    );
+
+    println!("\nFetching profiles with enhanced filter (bio keywords, min score, recent matches):");
+    let inaccessible = alice_shard.fetch_relevant_profiles(&enhanced_filter, &mock_profile_db, &mut shared_symmetric_keys, "alice", &ledger);
+    for profile in &alice_shard.relevant_profiles {
+        if let Some(key) = shared_symmetric_keys.get(&("alice".to_string(), profile.user_id.clone())) {
+            if let Some(raw_data) = profile.decrypt(key) {
+                let score = alice_shard.calculate_interaction_score(&profile.user_id);
+                println!("User {} (Score: {}): {:?}", profile.user_id, score, raw_data);
+            }
+        }
+    }
+    println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
+
+    println!("\nBob fetching profiles after key re-sharing (basic filter):");
+    let inaccessible = bob_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "bob", &ledger);
+    for profile in &bob_shard.relevant_profiles {
+        if let Some(key) = shared_symmetric_keys.get(&("bob".to_string(), profile.user_id.clone())) {
             if let Some(raw_data) = profile.decrypt(key) {
                 println!("User {}: {:?}", profile.user_id, raw_data);
             }
@@ -649,7 +1299,35 @@ fn main() {
         println!("  Timestamp: {}", block.timestamp);
         println!("  Transactions: {:?}", block.transactions);
         println!("  Nonce: {}", block.nonce);
+        println!("  Mined by: {}", block.miner_name);
     }
 
-    println!("\nNote: Miner win stats not tracked per block in this version. Extend GlobalBlock to include miner_name if needed.");
+    println!("\nMiner Statistics:");
+    let total_blocks = ledger.chain.len() as f64;
+    let mut miner_wins: HashMap<String, usize> = HashMap::new();
+    let mut miner_times: HashMap<String, Vec<f64>> = HashMap::new();
+
+    for (i, block) in ledger.chain.iter().enumerate().skip(1) {
+        *miner_wins.entry(block.miner_name.clone()).or_insert(0) += 1;
+        miner_times
+            .entry(block.miner_name.clone())
+            .or_insert_with(Vec::new)
+            .push(ledger.mining_durations[i - 1]);
+    }
+
+    let default_times: Vec<f64> = Vec::new();
+    for miner in &ledger.miners {
+        let wins = miner_wins.get(&miner.name).unwrap_or(&0);
+        let win_rate = (*wins as f64 / total_blocks) * 100.0;
+        let times = miner_times.get(&miner.name).unwrap_or(&default_times);
+        let avg_time = if times.is_empty() {
+            0.0
+        } else {
+            times.iter().sum::<f64>() / times.len() as f64
+        };
+        println!(
+            "{}: Wins = {}, Win Rate = {:.2}%, Avg Mining Time = {:.3}s",
+            miner.name, wins, win_rate, avg_time
+        );
+    }
 }
