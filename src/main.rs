@@ -70,6 +70,7 @@ struct Transaction {
     match_pair: Option<(String, String)>,
     revoked_key_pair: Option<(String, String)>,
     encrypted_key: Option<Vec<u8>>,
+    encrypted_content: Option<Vec<u8>>,
     timestamp: String,
     global_tx_id: String,
 }
@@ -88,6 +89,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -106,6 +108,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -124,6 +127,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -142,6 +146,7 @@ impl Transaction {
             match_pair: Some((user_id1, user_id2)),
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -160,12 +165,22 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: Some((revoker_id, target_id)),
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
     }
 
-    fn new_message(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
+    fn new_message(sender_id: String, receiver_id: String, content: &str, shared_key: &[u8; 32], timestamp: String, global_tx_id: String) -> Self {
+        let cipher = Aes256Gcm::new(shared_key.into());
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher.encrypt(nonce, content.as_bytes())
+            .expect("Failed to encrypt message content");
+        let mut encrypted_content = nonce_bytes.to_vec();
+        encrypted_content.extend(ciphertext);
+
         Transaction {
             transaction_type: TransactionType::Message,
             sender_id,
@@ -178,11 +193,13 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: Some(encrypted_content),
             timestamp,
             global_tx_id,
         }
     }
 
+    #[allow(dead_code)]
     fn new_like(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
         Transaction {
             transaction_type: TransactionType::Like,
@@ -196,12 +213,22 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
     }
 
-    fn new_photo_share(sender_id: String, receiver_id: String, timestamp: String, global_tx_id: String) -> Self {
+    fn new_photo_share(sender_id: String, receiver_id: String, content: &str, shared_key: &[u8; 32], timestamp: String, global_tx_id: String) -> Self {
+        let cipher = Aes256Gcm::new(shared_key.into());
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher.encrypt(nonce, content.as_bytes())
+            .expect("Failed to encrypt photo content");
+        let mut encrypted_content = nonce_bytes.to_vec();
+        encrypted_content.extend(ciphertext);
+
         Transaction {
             transaction_type: TransactionType::PhotoShare,
             sender_id,
@@ -214,6 +241,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: Some(encrypted_content),
             timestamp,
             global_tx_id,
         }
@@ -232,6 +260,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -250,6 +279,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -268,6 +298,7 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: None,
+            encrypted_content: None,
             timestamp,
             global_tx_id,
         }
@@ -286,8 +317,31 @@ impl Transaction {
             match_pair: None,
             revoked_key_pair: None,
             encrypted_key: Some(encrypted_key),
+            encrypted_content: None,
             timestamp,
             global_tx_id,
+        }
+    }
+
+    fn decrypt_content(&self, shared_key: &[u8; 32]) -> Option<String> {
+        match self.transaction_type {
+            TransactionType::Message | TransactionType::PhotoShare => {
+                if let Some(encrypted_content) = &self.encrypted_content {
+                    let cipher = Aes256Gcm::new(shared_key.into());
+                    if encrypted_content.len() < 12 {
+                        return None;
+                    }
+                    let (nonce_bytes, ciphertext) = encrypted_content.split_at(12);
+                    let nonce = Nonce::from_slice(nonce_bytes);
+                    match cipher.decrypt(nonce, ciphertext) {
+                        Ok(plaintext) => String::from_utf8(plaintext).ok(),
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 }
@@ -446,6 +500,7 @@ struct UserShard {
     balance: f64,
     transactions: Vec<Transaction>,
     interactions: Vec<Interaction>,
+    messages: Vec<Transaction>,
     profile: Profile,
     relevant_profiles: Vec<Profile>,
 }
@@ -463,6 +518,7 @@ impl UserShard {
             balance,
             transactions,
             interactions,
+            messages: Vec::new(),
             profile,
             relevant_profiles: Vec::new(),
         }
@@ -718,7 +774,7 @@ impl GlobalBlock {
     }
 
     fn compute_hash(&self) -> String {
-        let mut hasher = Sha3_256::new();
+        let mut hasher = Sha3_256::default();
         let tx_bytes = serde_json::to_vec(&self.transactions)
             .expect("Failed to serialize transactions");
         hasher.update(&tx_bytes);
@@ -898,7 +954,6 @@ fn main() {
 
     let mut shared_symmetric_keys: HashMap<(String, String), [u8; 32]> = HashMap::new();
 
-    // Consume key pairs to derive shared secrets
     let alice_keys = key_pairs.remove("alice").expect("Alice's key pair should exist");
     let alice_symmetric_key = alice_keys.symmetric_key;
     let alice_public_key = alice_keys.public_key;
@@ -929,6 +984,7 @@ fn main() {
     shared_symmetric_keys.insert(("alice".to_string(), "bob".to_string()), bob_symmetric_key);
 
     shared_symmetric_keys.insert(("alice".to_string(), "alice".to_string()), alice_symmetric_key);
+    shared_symmetric_keys.insert(("bob".to_string(), "bob".to_string()), bob_symmetric_key);
 
     let alice_profile = mock_profile_db.iter()
         .find(|p| p.user_id == "alice")
@@ -1012,15 +1068,21 @@ fn main() {
 
     println!("\nSimulating Alice messaging Bob...");
     let start = Instant::now();
-    let message_tx = Transaction::new_message(
+    let message_tx1 = Transaction::new_message(
         "alice".to_string(),
         "bob".to_string(),
+        "Hey Bob, loved your hiking photo!",
+        &bob_symmetric_key,
         "2025-03-06".to_string(),
-        "message_alice_bob".to_string(),
+        "message_alice_bob_1".to_string(),
     );
-    let miner_name = ledger.add_block(vec![message_tx]);
+    let miner_name = ledger.add_block(vec![message_tx1.clone()]);
     let duration = start.elapsed();
     println!("Block 4 mined by {} in {:?}", miner_name, duration);
+    if let Some(content) = message_tx1.decrypt_content(&bob_symmetric_key) {
+        println!("Decrypted message: {}", content);
+    }
+    alice_shard.messages.push(message_tx1.clone());
     alice_shard.interactions.push(Interaction {
         event_type: "message".to_string(),
         user_id: "alice".to_string(),
@@ -1028,22 +1090,28 @@ fn main() {
         score: 2,
     });
 
-    println!("\nSimulating Bob liking Alice's profile...");
+    println!("\nSimulating Bob replying to Alice...");
     let start = Instant::now();
-    let like_tx = Transaction::new_like(
+    let message_tx2 = Transaction::new_message(
         "bob".to_string(),
         "alice".to_string(),
+        "Thanks Alice, your yoga pic is cool!",
+        &alice_symmetric_key,
         "2025-03-06".to_string(),
-        "like_bob_alice".to_string(),
+        "message_bob_alice_1".to_string(),
     );
-    let miner_name = ledger.add_block(vec![like_tx]);
+    let miner_name = ledger.add_block(vec![message_tx2.clone()]);
     let duration = start.elapsed();
     println!("Block 5 mined by {} in {:?}", miner_name, duration);
+    if let Some(content) = message_tx2.decrypt_content(&alice_symmetric_key) {
+        println!("Decrypted message: {}", content);
+    }
+    alice_shard.messages.push(message_tx2.clone());
     alice_shard.interactions.push(Interaction {
-        event_type: "like".to_string(),
+        event_type: "message".to_string(),
         user_id: "bob".to_string(),
         target_id: "alice".to_string(),
-        score: 1,
+        score: 2,
     });
 
     println!("\nSimulating Alice sharing a photo with Bob...");
@@ -1051,64 +1119,24 @@ fn main() {
     let photo_tx = Transaction::new_photo_share(
         "alice".to_string(),
         "bob".to_string(),
+        "base64:yoga.jpg",
+        &bob_symmetric_key,
         "2025-03-06".to_string(),
         "photo_alice_bob".to_string(),
     );
-    let miner_name = ledger.add_block(vec![photo_tx]);
+    let miner_name = ledger.add_block(vec![photo_tx.clone()]);
     let duration = start.elapsed();
     println!("Block 6 mined by {} in {:?}", miner_name, duration);
+    if let Some(content) = photo_tx.decrypt_content(&bob_symmetric_key) {
+        println!("Decrypted photo: {}", content);
+    }
+    alice_shard.messages.push(photo_tx.clone());
     alice_shard.interactions.push(Interaction {
-        event_type: "photoshare".to_string(),
+        event_type: "photo_share".to_string(),
         user_id: "alice".to_string(),
         target_id: "bob".to_string(),
         score: 3,
     });
-
-    println!("\nBob fetching profiles after interactions (basic filter):");
-    let mut bob_shard = UserShard::new(
-        "bob".to_string(),
-        0.0,
-        Vec::new(),
-        vec![
-            Interaction {
-                event_type: "match".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 5,
-            },
-            Interaction {
-                event_type: "message".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 2,
-            },
-            Interaction {
-                event_type: "like".to_string(),
-                user_id: "bob".to_string(),
-                target_id: "alice".to_string(),
-                score: 1,
-            },
-            Interaction {
-                event_type: "photoshare".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 3,
-            },
-        ],
-        mock_profile_db.iter()
-            .find(|p| p.user_id == "bob")
-            .expect("Bob's profile should exist")
-            .clone(),
-    );
-    let inaccessible = bob_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "bob", &ledger);
-    for profile in &bob_shard.relevant_profiles {
-        if let Some(key) = shared_symmetric_keys.get(&("bob".to_string(), profile.user_id.clone())) {
-            if let Some(raw_data) = profile.decrypt(key) {
-                println!("User {}: {:?}", profile.user_id, raw_data);
-            }
-        }
-    }
-    println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
 
     println!("\nSimulating Charlie deleting their profile...");
     let mut charlie_shard = UserShard::new(
@@ -1158,12 +1186,6 @@ fn main() {
     let miner_name = ledger.add_block(vec![video_call_tx]);
     let duration = start.elapsed();
     println!("Block 10 mined by {} in {:?}", miner_name, duration);
-    bob_shard.interactions.push(Interaction {
-        event_type: "videocall".to_string(),
-        user_id: "bob".to_string(),
-        target_id: "alice".to_string(),
-        score: 4,
-    });
     alice_shard.interactions.push(Interaction {
         event_type: "videocall".to_string(),
         user_id: "bob".to_string(),
@@ -1218,7 +1240,6 @@ fn main() {
     let duration = start.elapsed();
     println!("Block 13 mined by {} in {:?}", miner_name, duration);
     shared_symmetric_keys.insert(("bob".to_string(), "alice".to_string()), alice_symmetric_key);
-    // Clear the revocation from the ledger
     ledger.chain.iter_mut().for_each(|block| {
         block.transactions.retain(|tx| {
             !matches!(tx.transaction_type, TransactionType::KeyRevocation)
@@ -1226,8 +1247,137 @@ fn main() {
         });
     });
 
+    println!("\nSimulating Alice messaging Bob again...");
+    let start = Instant::now();
+    let message_tx3 = Transaction::new_message(
+        "alice".to_string(),
+        "bob".to_string(),
+        "Let’s hike sometime!",
+        &bob_symmetric_key,
+        "2025-03-13".to_string(),
+        "message_alice_bob_2".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![message_tx3.clone()]);
+    let duration = start.elapsed();
+    println!("Block 14 mined by {} in {:?}", miner_name, duration);
+    if let Some(content) = message_tx3.decrypt_content(&bob_symmetric_key) {
+        println!("Decrypted message: {}", content);
+    }
+    alice_shard.messages.push(message_tx3.clone());
+    alice_shard.interactions.push(Interaction {
+        event_type: "message".to_string(),
+        user_id: "alice".to_string(),
+        target_id: "bob".to_string(),
+        score: 2,
+    });
+
+    println!("\nSimulating Bob replying to Alice again...");
+    let start = Instant::now();
+    let message_tx4 = Transaction::new_message(
+        "bob".to_string(),
+        "alice".to_string(),
+        "Sweet, how about Saturday?",
+        &alice_symmetric_key,
+        "2025-03-13".to_string(),
+        "message_bob_alice_2".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![message_tx4.clone()]);
+    let duration = start.elapsed();
+    println!("Block 15 mined by {} in {:?}", miner_name, duration);
+    if let Some(content) = message_tx4.decrypt_content(&alice_symmetric_key) {
+        println!("Decrypted message: {}", content);
+    }
+    alice_shard.messages.push(message_tx4.clone());
+    alice_shard.interactions.push(Interaction {
+        event_type: "message".to_string(),
+        user_id: "bob".to_string(),
+        target_id: "alice".to_string(),
+        score: 2,
+    });
+
+    // Initialize bob_shard here with all interactions
+    println!("\nBob fetching profiles after interactions (basic filter):");
+    let mut bob_shard = UserShard::new(
+        "bob".to_string(),
+        0.0,
+        Vec::new(),
+        vec![
+            Interaction {
+                event_type: "match".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 5,
+            },
+            Interaction {
+                event_type: "message".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 2,
+            },
+            Interaction {
+                event_type: "message".to_string(),
+                user_id: "bob".to_string(),
+                target_id: "alice".to_string(),
+                score: 2,
+            },
+            Interaction {
+                event_type: "photo_share".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 3,
+            },
+            Interaction {
+                event_type: "videocall".to_string(),
+                user_id: "bob".to_string(),
+                target_id: "alice".to_string(),
+                score: 4,
+            },
+            Interaction {
+                event_type: "message".to_string(),
+                user_id: "alice".to_string(),
+                target_id: "bob".to_string(),
+                score: 2,
+            },
+            Interaction {
+                event_type: "message".to_string(),
+                user_id: "bob".to_string(),
+                target_id: "alice".to_string(),
+                score: 2,
+            },
+        ],
+        mock_profile_db.iter()
+            .find(|p| p.user_id == "bob")
+            .expect("Bob's profile should exist")
+            .clone(),
+    );
+    bob_shard.messages.push(message_tx1.clone());
+    bob_shard.messages.push(message_tx2.clone());
+    bob_shard.messages.push(photo_tx.clone());
+    bob_shard.messages.push(message_tx3.clone());
+    bob_shard.messages.push(message_tx4.clone());
+    let inaccessible = bob_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "bob", &ledger);
+    for profile in &bob_shard.relevant_profiles {
+        if let Some(key) = shared_symmetric_keys.get(&("bob".to_string(), profile.user_id.clone())) {
+            if let Some(raw_data) = profile.decrypt(key) {
+                println!("User {}: {:?}", profile.user_id, raw_data);
+            }
+        }
+    }
+    println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
+    println!("Chat history for Bob:");
+    for msg in &bob_shard.messages {
+        if let Some(key) = shared_symmetric_keys.get(&(msg.sender_id.clone(), msg.receiver_id.clone())) {
+            if let Some(content) = msg.decrypt_content(key) {
+                match msg.transaction_type {
+                    TransactionType::PhotoShare => println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+                    _ => println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+                }
+            }
+        }
+    }
+
     let user_ids: Vec<String> = vec!["alice".to_string(), "bob".to_string(), "charlie".to_string(), "diana".to_string()];
-    for i in 14..=TOTAL_BLOCKS {
+    for i in 16..=TOTAL_BLOCKS {
         let start = Instant::now();
         let num_txs = rand::thread_rng().gen_range(1..=10);
         let mut transactions = Vec::new();
@@ -1258,6 +1408,17 @@ fn main() {
         }
     }
     println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
+    println!("Chat history for Alice:");
+    for msg in &alice_shard.messages {
+        if let Some(key) = shared_symmetric_keys.get(&(msg.sender_id.clone(), msg.receiver_id.clone())) {
+            if let Some(content) = msg.decrypt_content(key) {
+                match msg.transaction_type {
+                    TransactionType::PhotoShare => println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+                    _ => println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+                }
+            }
+        }
+    }
 
     let enhanced_filter = ProfileFilter::new(
         Some("CA".to_string()),
@@ -1265,7 +1426,7 @@ fn main() {
         None,
         None,
         Some(vec!["hiking".to_string(), "yoga".to_string()]),
-        Some(15),
+        Some(14),
         Some(true),
     );
 
@@ -1291,6 +1452,17 @@ fn main() {
         }
     }
     println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
+    println!("Chat history for Bob (again):");
+    for msg in &bob_shard.messages {
+        if let Some(key) = shared_symmetric_keys.get(&(msg.sender_id.clone(), msg.receiver_id.clone())) {
+            if let Some(content) = msg.decrypt_content(key) {
+                match msg.transaction_type {
+                    TransactionType::PhotoShare => println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+                    _ => println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+                }
+            }
+        }
+    }
 
     println!("\nCuneos Global Ledger Chain:");
     for (i, block) in ledger.get_chain().iter().enumerate() {
@@ -1298,6 +1470,25 @@ fn main() {
         println!("  Previous Hash: {}", block.previous_hash);
         println!("  Timestamp: {}", block.timestamp);
         println!("  Transactions: {:?}", block.transactions);
+        for tx in &block.transactions {
+            match tx.transaction_type {
+                TransactionType::Message => {
+                    if let Some(key) = shared_symmetric_keys.get(&(tx.sender_id.clone(), tx.receiver_id.clone())) {
+                        if let Some(content) = tx.decrypt_content(key) {
+                            println!("  Decrypted Message ({} -> {}): {}", tx.sender_id, tx.receiver_id, content);
+                        }
+                    }
+                }
+                TransactionType::PhotoShare => {
+                    if let Some(key) = shared_symmetric_keys.get(&(tx.sender_id.clone(), tx.receiver_id.clone())) {
+                        if let Some(content) = tx.decrypt_content(key) {
+                            println!("  Decrypted Photo ({} -> {}): {}", tx.sender_id, tx.receiver_id, content);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         println!("  Nonce: {}", block.nonce);
         println!("  Mined by: {}", block.miner_name);
     }
