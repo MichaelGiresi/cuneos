@@ -54,6 +54,9 @@ enum TransactionType {
     VideoCall,
     ReportUser,
     KeyShare,
+    VoiceMessage,    // New: Encrypted audio
+    Gift,           // New: Peace transfer as a gift
+    DateRequest,    // New: Propose a date
 }
 
 // Transaction: Tracks events in the Cuneos ledger
@@ -323,9 +326,75 @@ impl Transaction {
         }
     }
 
+    fn new_voice_message(sender_id: String, receiver_id: String, content: &str, shared_key: &[u8; 32], timestamp: String, global_tx_id: String) -> Self {
+        let cipher = Aes256Gcm::new(shared_key.into());
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher.encrypt(nonce, content.as_bytes())
+            .expect("Failed to encrypt voice message");
+        let mut encrypted_content = nonce_bytes.to_vec();
+        encrypted_content.extend(ciphertext);
+
+        Transaction {
+            transaction_type: TransactionType::VoiceMessage,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            encrypted_content: Some(encrypted_content),
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_gift(sender_id: String, receiver_id: String, amount: f64, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::Gift,
+            sender_id,
+            receiver_id,
+            amount: Some(amount),
+            duration: None,
+            reason: None,
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            encrypted_content: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
+    fn new_date_request(sender_id: String, receiver_id: String, details: &str, timestamp: String, global_tx_id: String) -> Self {
+        Transaction {
+            transaction_type: TransactionType::DateRequest,
+            sender_id,
+            receiver_id,
+            amount: None,
+            duration: None,
+            reason: Some(details.to_string()),
+            user_id: None,
+            updated_profile: None,
+            match_pair: None,
+            revoked_key_pair: None,
+            encrypted_key: None,
+            encrypted_content: None,
+            timestamp,
+            global_tx_id,
+        }
+    }
+
     fn decrypt_content(&self, shared_key: &[u8; 32]) -> Option<String> {
         match self.transaction_type {
-            TransactionType::Message | TransactionType::PhotoShare => {
+            TransactionType::Message | TransactionType::PhotoShare | TransactionType::VoiceMessage => {
                 if let Some(encrypted_content) = &self.encrypted_content {
                     let cipher = Aes256Gcm::new(shared_key.into());
                     if encrypted_content.len() < 12 {
@@ -376,17 +445,13 @@ struct Profile {
 impl Profile {
     fn new(user_id: String, raw_data: RawProfileData, key: &[u8; 32]) -> Self {
         let cipher = Aes256Gcm::new(key.into());
-        
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-
         let plaintext = serde_json::to_vec(&raw_data)
             .expect("Failed to serialize profile data");
-        let ciphertext = cipher
-            .encrypt(nonce, plaintext.as_ref())
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
             .expect("Encryption failed");
-
         let mut encrypted_data = nonce_bytes.to_vec();
         encrypted_data.extend(ciphertext);
 
@@ -401,15 +466,12 @@ impl Profile {
         if self.is_deleted {
             return None;
         }
-
         let cipher = Aes256Gcm::new(key.into());
-
         if self.encrypted_data.len() < 12 {
             return None;
         }
         let (nonce_bytes, ciphertext) = self.encrypted_data.split_at(12);
         let nonce = Nonce::from_slice(nonce_bytes);
-
         match cipher.decrypt(nonce, ciphertext) {
             Ok(plaintext) => serde_json::from_slice(&plaintext).ok(),
             Err(_) => None,
@@ -421,13 +483,10 @@ impl Profile {
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-
         let plaintext = serde_json::to_vec(&new_data)
             .expect("Failed to serialize updated profile data");
-        let ciphertext = cipher
-            .encrypt(nonce, plaintext.as_ref())
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
             .expect("Encryption failed");
-
         let mut encrypted_data = nonce_bytes.to_vec();
         encrypted_data.extend(ciphertext);
         encrypted_data
@@ -919,7 +978,7 @@ fn main() {
     const MIN_DIFFICULTY: usize = 1;
     const TARGET_BLOCK_TIME: f64 = 5.0;
     const ADJUSTMENT_INTERVAL: usize = 3;
-    const TOTAL_BLOCKS: usize = 20;
+    const TOTAL_BLOCKS: usize = 18; // Adjusted for new interactions
 
     let miners = vec![
         Miner::new("Miner1".to_string(), 1.0),
@@ -1295,55 +1354,87 @@ fn main() {
         score: 2,
     });
 
-    // Initialize bob_shard here with all interactions
+    println!("\nSimulating Alice sending Bob a voice message...");
+    let start = Instant::now();
+    let voice_tx = Transaction::new_voice_message(
+        "alice".to_string(),
+        "bob".to_string(),
+        "base64:audio.mp3",
+        &bob_symmetric_key,
+        "2025-03-14".to_string(),
+        "voice_alice_bob".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![voice_tx.clone()]);
+    let duration = start.elapsed();
+    println!("Block 16 mined by {} in {:?}", miner_name, duration);
+    if let Some(content) = voice_tx.decrypt_content(&bob_symmetric_key) {
+        println!("Decrypted voice message: {}", content);
+    }
+    alice_shard.messages.push(voice_tx.clone());
+    alice_shard.interactions.push(Interaction {
+        event_type: "voice_message".to_string(),
+        user_id: "alice".to_string(),
+        target_id: "bob".to_string(),
+        score: 3,
+    });
+
+    println!("\nSimulating Bob sending Alice a gift...");
+    let start = Instant::now();
+    let gift_tx = Transaction::new_gift(
+        "bob".to_string(),
+        "alice".to_string(),
+        5.0,
+        "2025-03-14".to_string(),
+        "gift_bob_alice".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![gift_tx.clone()]);
+    let duration = start.elapsed();
+    println!("Block 17 mined by {} in {:?}", miner_name, duration);
+    alice_shard.messages.push(gift_tx.clone());
+    alice_shard.interactions.push(Interaction {
+        event_type: "gift".to_string(),
+        user_id: "bob".to_string(),
+        target_id: "alice".to_string(),
+        score: 5,
+    });
+
+    println!("\nSimulating Alice requesting a date with Bob...");
+    let start = Instant::now();
+    let date_tx = Transaction::new_date_request(
+        "alice".to_string(),
+        "bob".to_string(),
+        "Hike on Saturday at 10 AM",
+        "2025-03-14".to_string(),
+        "date_alice_bob".to_string(),
+    );
+    let miner_name = ledger.add_block(vec![date_tx.clone()]);
+    let duration = start.elapsed();
+    println!("Block 18 mined by {} in {:?}", miner_name, duration);
+    alice_shard.messages.push(date_tx.clone());
+    alice_shard.interactions.push(Interaction {
+        event_type: "date_request".to_string(),
+        user_id: "alice".to_string(),
+        target_id: "bob".to_string(),
+        score: 6,
+    });
+
+    // Initialize bob_shard with all interactions
     println!("\nBob fetching profiles after interactions (basic filter):");
     let mut bob_shard = UserShard::new(
         "bob".to_string(),
         0.0,
         Vec::new(),
         vec![
-            Interaction {
-                event_type: "match".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 5,
-            },
-            Interaction {
-                event_type: "message".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 2,
-            },
-            Interaction {
-                event_type: "message".to_string(),
-                user_id: "bob".to_string(),
-                target_id: "alice".to_string(),
-                score: 2,
-            },
-            Interaction {
-                event_type: "photo_share".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 3,
-            },
-            Interaction {
-                event_type: "videocall".to_string(),
-                user_id: "bob".to_string(),
-                target_id: "alice".to_string(),
-                score: 4,
-            },
-            Interaction {
-                event_type: "message".to_string(),
-                user_id: "alice".to_string(),
-                target_id: "bob".to_string(),
-                score: 2,
-            },
-            Interaction {
-                event_type: "message".to_string(),
-                user_id: "bob".to_string(),
-                target_id: "alice".to_string(),
-                score: 2,
-            },
+            Interaction { event_type: "match".to_string(), user_id: "alice".to_string(), target_id: "bob".to_string(), score: 5 },
+            Interaction { event_type: "message".to_string(), user_id: "alice".to_string(), target_id: "bob".to_string(), score: 2 },
+            Interaction { event_type: "message".to_string(), user_id: "bob".to_string(), target_id: "alice".to_string(), score: 2 },
+            Interaction { event_type: "photo_share".to_string(), user_id: "alice".to_string(), target_id: "bob".to_string(), score: 3 },
+            Interaction { event_type: "videocall".to_string(), user_id: "bob".to_string(), target_id: "alice".to_string(), score: 4 },
+            Interaction { event_type: "message".to_string(), user_id: "alice".to_string(), target_id: "bob".to_string(), score: 2 },
+            Interaction { event_type: "message".to_string(), user_id: "bob".to_string(), target_id: "alice".to_string(), score: 2 },
+            Interaction { event_type: "voice_message".to_string(), user_id: "alice".to_string(), target_id: "bob".to_string(), score: 3 },
+            Interaction { event_type: "gift".to_string(), user_id: "bob".to_string(), target_id: "alice".to_string(), score: 5 },
+            Interaction { event_type: "date_request".to_string(), user_id: "alice".to_string(), target_id: "bob".to_string(), score: 6 },
         ],
         mock_profile_db.iter()
             .find(|p| p.user_id == "bob")
@@ -1355,6 +1446,9 @@ fn main() {
     bob_shard.messages.push(photo_tx.clone());
     bob_shard.messages.push(message_tx3.clone());
     bob_shard.messages.push(message_tx4.clone());
+    bob_shard.messages.push(voice_tx.clone());
+    bob_shard.messages.push(gift_tx.clone());
+    bob_shard.messages.push(date_tx.clone());
     let inaccessible = bob_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "bob", &ledger);
     for profile in &bob_shard.relevant_profiles {
         if let Some(key) = shared_symmetric_keys.get(&("bob".to_string(), profile.user_id.clone())) {
@@ -1367,38 +1461,38 @@ fn main() {
     println!("Chat history for Bob:");
     for msg in &bob_shard.messages {
         if let Some(key) = shared_symmetric_keys.get(&(msg.sender_id.clone(), msg.receiver_id.clone())) {
-            if let Some(content) = msg.decrypt_content(key) {
-                match msg.transaction_type {
-                    TransactionType::PhotoShare => println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content),
-                    _ => println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+            match msg.transaction_type {
+                TransactionType::Message => {
+                    if let Some(content) = msg.decrypt_content(key) {
+                        println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content);
+                    }
                 }
+                TransactionType::PhotoShare => {
+                    if let Some(content) = msg.decrypt_content(key) {
+                        println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content);
+                    }
+                }
+                TransactionType::VoiceMessage => {
+                    if let Some(content) = msg.decrypt_content(key) {
+                        println!("{}: {} -> {}: [Voice: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content);
+                    }
+                }
+                TransactionType::Gift => {
+                    if let Some(amount) = msg.amount {
+                        println!("{}: {} -> {}: [Gift: {} Peace]", msg.timestamp, msg.sender_id, msg.receiver_id, amount);
+                    }
+                }
+                TransactionType::DateRequest => {
+                    if let Some(details) = &msg.reason {
+                        println!("{}: {} -> {}: [Date: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, details);
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    let user_ids: Vec<String> = vec!["alice".to_string(), "bob".to_string(), "charlie".to_string(), "diana".to_string()];
-    for i in 16..=TOTAL_BLOCKS {
-        let start = Instant::now();
-        let num_txs = rand::thread_rng().gen_range(1..=10);
-        let mut transactions = Vec::new();
-        for j in 0..num_txs {
-            let sender = user_ids.choose(&mut rand::thread_rng()).unwrap();
-            let receiver = user_ids.choose(&mut rand::thread_rng()).unwrap();
-            transactions.push(Transaction::new_peace_transfer(
-                sender.clone(),
-                receiver.clone(),
-                rand::thread_rng().gen_range(1.0..10.0),
-                format!("2025-03-{:02}", i - 3),
-                format!("tx{:03}_{}", i, j),
-            ));
-        }
-        let miner_name = ledger.add_block(transactions);
-        let duration = start.elapsed();
-        println!("Block {} mined by {} in {:?}", i, miner_name, duration);
-        println!("Current difficulty: {:.2}", ledger.get_difficulty());
-    }
-
-    println!("\nFetching profiles after updates, deletion, key revocation, block, video call, reports, and key re-sharing (basic filter):");
+    println!("\nFetching profiles after updates (basic filter):");
     let inaccessible = alice_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "alice", &ledger);
     for profile in &alice_shard.relevant_profiles {
         if let Some(key) = shared_symmetric_keys.get(&("alice".to_string(), profile.user_id.clone())) {
@@ -1411,11 +1505,33 @@ fn main() {
     println!("Chat history for Alice:");
     for msg in &alice_shard.messages {
         if let Some(key) = shared_symmetric_keys.get(&(msg.sender_id.clone(), msg.receiver_id.clone())) {
-            if let Some(content) = msg.decrypt_content(key) {
-                match msg.transaction_type {
-                    TransactionType::PhotoShare => println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content),
-                    _ => println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content),
+            match msg.transaction_type {
+                TransactionType::Message => {
+                    if let Some(content) = msg.decrypt_content(key) {
+                        println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content);
+                    }
                 }
+                TransactionType::PhotoShare => {
+                    if let Some(content) = msg.decrypt_content(key) {
+                        println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content);
+                    }
+                }
+                TransactionType::VoiceMessage => {
+                    if let Some(content) = msg.decrypt_content(key) {
+                        println!("{}: {} -> {}: [Voice: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content);
+                    }
+                }
+                TransactionType::Gift => {
+                    if let Some(amount) = msg.amount {
+                        println!("{}: {} -> {}: [Gift: {} Peace]", msg.timestamp, msg.sender_id, msg.receiver_id, amount);
+                    }
+                }
+                TransactionType::DateRequest => {
+                    if let Some(details) = &msg.reason {
+                        println!("{}: {} -> {}: [Date: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, details);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -1442,28 +1558,6 @@ fn main() {
     }
     println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
 
-    println!("\nBob fetching profiles after key re-sharing (basic filter):");
-    let inaccessible = bob_shard.fetch_relevant_profiles(&basic_filter, &mock_profile_db, &mut shared_symmetric_keys, "bob", &ledger);
-    for profile in &bob_shard.relevant_profiles {
-        if let Some(key) = shared_symmetric_keys.get(&("bob".to_string(), profile.user_id.clone())) {
-            if let Some(raw_data) = profile.decrypt(key) {
-                println!("User {}: {:?}", profile.user_id, raw_data);
-            }
-        }
-    }
-    println!("Inaccessible profiles (missing keys): {:?}", inaccessible);
-    println!("Chat history for Bob (again):");
-    for msg in &bob_shard.messages {
-        if let Some(key) = shared_symmetric_keys.get(&(msg.sender_id.clone(), msg.receiver_id.clone())) {
-            if let Some(content) = msg.decrypt_content(key) {
-                match msg.transaction_type {
-                    TransactionType::PhotoShare => println!("{}: {} -> {}: [Photo: {}]", msg.timestamp, msg.sender_id, msg.receiver_id, content),
-                    _ => println!("{}: {} -> {}: {}", msg.timestamp, msg.sender_id, msg.receiver_id, content),
-                }
-            }
-        }
-    }
-
     println!("\nCuneos Global Ledger Chain:");
     for (i, block) in ledger.get_chain().iter().enumerate() {
         println!("Block {}: Hash = {}", i, block.hash);
@@ -1484,6 +1578,23 @@ fn main() {
                         if let Some(content) = tx.decrypt_content(key) {
                             println!("  Decrypted Photo ({} -> {}): {}", tx.sender_id, tx.receiver_id, content);
                         }
+                    }
+                }
+                TransactionType::VoiceMessage => {
+                    if let Some(key) = shared_symmetric_keys.get(&(tx.sender_id.clone(), tx.receiver_id.clone())) {
+                        if let Some(content) = tx.decrypt_content(key) {
+                            println!("  Decrypted Voice ({} -> {}): {}", tx.sender_id, tx.receiver_id, content);
+                        }
+                    }
+                }
+                TransactionType::Gift => {
+                    if let Some(amount) = tx.amount {
+                        println!("  Gift ({} -> {}): {} Peace", tx.sender_id, tx.receiver_id, amount);
+                    }
+                }
+                TransactionType::DateRequest => {
+                    if let Some(details) = &tx.reason {
+                        println!("  Date Request ({} -> {}): {}", tx.sender_id, tx.receiver_id, details);
                     }
                 }
                 _ => {}
